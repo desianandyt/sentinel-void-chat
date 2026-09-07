@@ -2,7 +2,7 @@
 
 ## 1. Create the database
 
-Create a Supabase project, open the SQL Editor, and run `schema.sql`. Copy the server-side PostgreSQL connection string from Supabase. Do not use the browser anon key as `DATABASE_URL`.
+Create a Supabase project, open the SQL Editor, and run `schema.sql`. Copy the server-side PostgreSQL connection string from Supabase. Do not use the browser anon key as `DATABASE_URL`. For Render, prefer Supabase **Connection Pooling → Transaction mode** on port `6543`; the direct `db.<project>.supabase.co:5432` host can be unreachable from some Render regions.
 
 ## 2. Create the Render service
 
@@ -16,7 +16,7 @@ Set these values in the Render service environment:
 
 | Variable | Value |
 |---|---|
-| `DATABASE_URL` | Supabase server-side PostgreSQL URL |
+| `DATABASE_URL` | Supabase server-side PostgreSQL pooler URL, preferably transaction mode on port 6543 |
 | `REDIS_URL` | Render Redis URL, if using multi-instance deployment |
 | `MESSAGE_ENCRYPTION_KEY` | URL-safe base64 encoding of exactly 32 random bytes |
 | `ADMIN_PASSWORD_HASH` | bcrypt hash of the production admin password |
@@ -40,6 +40,8 @@ python3 -c "import bcrypt; print(bcrypt.hashpw(b'REPLACE_ME', bcrypt.gensalt()).
 The development fallback credentials are `anand` / `papaanand`; replace the password hash before production use.
 
 ## 4. Verify
+
+The application attempts a safe `CREATE TABLE IF NOT EXISTS` bootstrap at startup, but you should still run the full `schema.sql` because it contains indexes, constraints, and RLS configuration.
 
 After deployment, open:
 

@@ -2,6 +2,7 @@ from __future__ import annotations
 import base64, os, re, threading, time
 from datetime import datetime, timezone
 import bcrypt
+import psycopg
 from dotenv import load_dotenv
 from flask import Flask, jsonify, render_template, request, session
 from werkzeug.exceptions import HTTPException
@@ -25,6 +26,10 @@ def build_app():
         try: db.log_security(event,detail,client_ip(),None)
         except Exception: pass
     app.config['SECURITY_LOG']=security_log
+    try:
+        db.ensure_schema()
+    except Exception as exc:
+        app.logger.warning('Database schema bootstrap unavailable: %s',exc)
     @app.errorhandler(HTTPException)
     def api_http_error(error):
         if request.path.startswith('/api/'):
@@ -75,6 +80,7 @@ def build_app():
         except Exception as exc:
             from psycopg.errors import UniqueViolation
             if isinstance(exc,UniqueViolation): return jsonify(error='Channel ID already exists'),409
+            if isinstance(exc,psycopg.Error): return jsonify(error='Database unavailable. Check DATABASE_URL and run schema.sql in Supabase.'),503
             raise
         return jsonify(channel=row)
     @app.post('/api/admin/login')
