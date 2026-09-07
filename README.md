@@ -10,7 +10,7 @@ Anonymous users receive a signed, HttpOnly, SameSite session cookie. The server 
 
 1. Create a Supabase project and run `schema.sql` in the SQL editor.
 2. Copy `.env.example` to `.env`. Set `DATABASE_URL` to the Supabase server-side connection string, not an anon browser key. Generate a 32-byte encryption key with `python -c "import os,base64; print(base64.urlsafe_b64encode(os.urandom(32)).decode())"` and place it in `MESSAGE_ENCRYPTION_KEY`.
-3. For the requested local credentials, the defaults are username `anand` and password `papaanand`; replace `ADMIN_PASSWORD_HASH` in production with a newly generated bcrypt hash.
+3. Set `ADMIN_USERNAME=anand` and `ADMIN_PASSWORD_HASH` to the bcrypt hash for the password you want. The repository includes the exact hash supplied for this deployment. A bcrypt hash cannot be converted back into its plaintext password; if that hash was not generated from `papaanand`, use its original password or generate a new hash.
 4. Run `docker compose up --build`, then open `http://localhost:5000`. Open `/admin` for the dashboard.
 
 ## Deployment

@@ -13,7 +13,7 @@ load_dotenv()
 
 def build_app():
     app=Flask(__name__)
-    app.config.update(SECRET_KEY=os.environ.get('SECRET_KEY','dev-only-change-me'),SESSION_TTL=int(os.environ.get('SESSION_TTL_SECONDS','86400')),COOKIE_SECURE=os.environ.get('COOKIE_SECURE','false').lower()=='true',ADMIN_USERNAME=os.environ.get('ADMIN_USERNAME','anand'),ADMIN_PASSWORD_HASH=os.environ.get('ADMIN_PASSWORD_HASH','$2b$12$nioGBqfOWaSOYQd1T5MdkOZ6M4BkEgDt/S5zT4B9r3HwHVC/PmXei'),BLOCKED_IPS=set(),SECURITY_LOG=lambda e,d: None)
+    app.config.update(SECRET_KEY=os.environ.get('SECRET_KEY','dev-only-change-me'),SESSION_TTL=int(os.environ.get('SESSION_TTL_SECONDS','86400')),COOKIE_SECURE=os.environ.get('COOKIE_SECURE','false').lower()=='true',ADMIN_USERNAME=os.environ.get('ADMIN_USERNAME','anand'),ADMIN_PASSWORD_HASH=os.environ.get('ADMIN_PASSWORD_HASH','$2a$12$41RM.C2hJqdLbbMZNXvC0ezrmM4Vhm0PiFiVASDj/eVN/qRtF450i'),BLOCKED_IPS=set(),SECURITY_LOG=lambda e,d: None)
     raw=os.environ.get('MESSAGE_ENCRYPTION_KEY','')
     try: key=base64.urlsafe_b64decode(raw+'===')
     except Exception: key=b''
@@ -39,7 +39,7 @@ def build_app():
     @app.get('/admin')
     def admin():
         if not session.get('sid'): new_identity()
-        return render_template('admin.html')
+        return render_template('admin.html',csrf=session['csrf'])
     @app.get('/healthz')
     def health(): return {'status':'ok'}
     @app.post('/api/session')
@@ -72,7 +72,8 @@ def build_app():
     @app.get('/api/admin/overview')
     @admin_required
     def api_admin_overview():
-        channels=db.active_channels(); violations=db.all_rows("select * from security_events where event_type='rate_limit' order by created_at desc limit 100"); return jsonify(channels=channels,violations=violations,sessions='anonymous/session cookies')
+        channels=db.active_channels(); violations=db.all_rows("select id,event_type,ip,session_hash,detail,created_at from security_events order by created_at desc limit 100"); blocked=db.all_rows('select ip,reason,created_at from blocked_ips order by created_at desc')
+        return jsonify(channels=channels,violations=violations,blocked_ips=blocked,sessions='anonymous/session cookies')
     @app.delete('/api/admin/channels/<code>')
     @admin_required
     def api_admin_delete_channel(code):
@@ -83,6 +84,18 @@ def build_app():
         rows=db.all_rows('select m.*,c.channel_code from messages m join channels c on c.id=m.channel_id where c.channel_code=%s order by m.created_at desc limit 500',(clean_text(code,64),))
         from .security import decrypt_message
         return jsonify(messages=[{'display_name':r['display_name'],'text':decrypt_message(r['nonce'],r['ciphertext']),'created_at':r['created_at'].isoformat()} for r in rows])
+    @app.post('/api/admin/blocked-ips')
+    @admin_required
+    def api_admin_block_ip():
+        data=request.get_json(silent=True) or {}; ip=clean_text(data.get('ip'),64); reason=clean_text(data.get('reason') or 'Blocked by administrator',200)
+        import ipaddress
+        try: ipaddress.ip_address(ip)
+        except ValueError: return jsonify(error='Invalid IP address'),400
+        db.execute('insert into blocked_ips(ip,reason) values(%s,%s) on conflict(ip) do update set reason=excluded.reason',(ip,reason)); app.config['BLOCKED_IPS'].add(ip); return jsonify(ok=True)
+    @app.delete('/api/admin/blocked-ips/<ip>')
+    @admin_required
+    def api_admin_unblock_ip(ip):
+        db.execute('delete from blocked_ips where ip=%s',(clean_text(ip,64),)); app.config['BLOCKED_IPS'].discard(ip); return jsonify(ok=True)
     register_socketio(socketio)
     if not app.debug and not os.environ.get('WERKZEUG_RUN_MAIN'): threading.Thread(target=cleanup_expired,daemon=True).start()
     app.socketio=socketio; return app
