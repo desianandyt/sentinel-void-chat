@@ -24,6 +24,11 @@ def session_hash(): return hashlib.sha256(session['sid'].encode()).hexdigest()
 def ensure_identity():
     if not session.get('sid') or session.get('expires',0)<time.time(): abort(401)
     if client_ip() in current_app.config['BLOCKED_IPS']: abort(403)
+def ensure_socket(data=None):
+    if not session.get('sid') or session.get('expires',0)<time.time(): return False
+    if client_ip() in current_app.config['BLOCKED_IPS']: return False
+    token=(data or {}).get('csrf') if isinstance(data,dict) else None
+    return bool(token and secrets.compare_digest(token,session.get('csrf','')))
 def require_identity(fn:Callable):
     @wraps(fn)
     def wrapped(*a,**kw):

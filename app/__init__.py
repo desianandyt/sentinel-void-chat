@@ -1,5 +1,5 @@
 from __future__ import annotations
-import base64, os, threading, time
+import base64, os, re, threading, time
 from datetime import datetime, timezone
 import bcrypt
 from dotenv import load_dotenv
@@ -41,6 +41,7 @@ def build_app():
     def guard():
         if request.endpoint == 'api_admin_login':
             if not session.get('sid'): new_identity()
+            rate_limit('admin_login',10,60)
             return
         if request.endpoint and request.endpoint.startswith('api_'):
             ensure_identity(); require_csrf(); rate_limit('http',120,60)
@@ -63,14 +64,18 @@ def build_app():
     @app.post('/api/channels')
     def api_create_channel():
         import bcrypt
-        data=request.get_json(silent=True) or {}; code=clean_text(data.get('channel_id'),64); name=clean_text(data.get('name') or code,80); password=str(data.get('password') or '')
-        minutes=int(data.get('expires_minutes') or 0)
-        if not 3<=len(code)<=64: return jsonify(error='Channel ID must be 3–64 characters'),400
+        data=request.get_json(silent=True) or {}; code=clean_text(data.get('channel_id'),64); name=clean_text(data.get('name') or code,80); password=str(data.get('password') or '')[:128]
+        try: minutes=int(data.get('expires_minutes') or 0)
+        except (TypeError,ValueError): return jsonify(error='Expiry must be a number of minutes'),400
+        if not 3<=len(code)<=64 or not re.fullmatch(r'[A-Za-z0-9_-]+',code): return jsonify(error='Channel ID may contain only letters, numbers, hyphens, and underscores'),400
         expires=None if minutes<=0 else datetime.now(timezone.utc).timestamp()+min(minutes,10080)*60
         if expires: from datetime import datetime as D; expires=D.fromtimestamp(expires,timezone.utc)
         try:
             row=db.one('insert into channels(channel_code,name,password_hash,creator_session_hash,expires_at) values(%s,%s,%s,%s,%s) returning channel_code,name,expires_at',(code,name,bcrypt.hashpw(password.encode(),bcrypt.gensalt()).decode() if password else None,__import__('hashlib').sha256(session['sid'].encode()).hexdigest(),expires))
-        except Exception: return jsonify(error='Channel ID already exists'),409
+        except Exception as exc:
+            from psycopg.errors import UniqueViolation
+            if isinstance(exc,UniqueViolation): return jsonify(error='Channel ID already exists'),409
+            raise
         return jsonify(channel=row)
     @app.post('/api/admin/login')
     def api_admin_login():
@@ -84,7 +89,7 @@ def build_app():
     @app.get('/api/admin/overview')
     @admin_required
     def api_admin_overview():
-        channels=db.active_channels(); violations=db.all_rows("select id,event_type,ip,session_hash,detail,created_at from security_events order by created_at desc limit 100"); blocked=db.all_rows('select ip,reason,created_at from blocked_ips order by created_at desc')
+        channels=db.active_channels(); violations=db.all_rows("select id,event_type,ip::text as ip,session_hash,detail,created_at from security_events order by created_at desc limit 100"); blocked=db.all_rows('select ip::text as ip,reason,created_at from blocked_ips order by created_at desc')
         return jsonify(channels=channels,violations=violations,blocked_ips=blocked,sessions='anonymous/session cookies')
     @app.delete('/api/admin/channels/<code>')
     @admin_required
@@ -109,7 +114,7 @@ def build_app():
     def api_admin_unblock_ip(ip):
         db.execute('delete from blocked_ips where ip=%s',(clean_text(ip,64),)); app.config['BLOCKED_IPS'].discard(ip); return jsonify(ok=True)
     register_socketio(socketio)
-    if not app.debug and not os.environ.get('WERKZEUG_RUN_MAIN'): threading.Thread(target=cleanup_expired,daemon=True).start()
+    if not app.debug and not os.environ.get('WERKZEUG_RUN_MAIN'): threading.Thread(target=cleanup_expired,args=(app,),daemon=True).start()
     app.socketio=socketio; return app
 app=build_app()
 if __name__=='__main__': app.socketio.run(app,host='0.0.0.0',port=int(os.environ.get('PORT','5000')))
