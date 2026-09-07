@@ -9,7 +9,7 @@ def timestamp(value):
 def register_socketio(socketio):
     @socketio.on('connect')
     def connected(auth=None):
-        if not ensure_socket(auth):
+        if not session.get('sid') or session.get('expires',0)<__import__('time').time():
             return False
         emit('ready',{'csrf':session['csrf']})
     @socketio.on('join_channel')
