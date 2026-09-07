@@ -91,6 +91,19 @@ def build_app():
     def api_admin_overview():
         channels=db.active_channels(); violations=db.all_rows("select id,event_type,ip::text as ip,session_hash,detail,created_at from security_events order by created_at desc limit 100"); blocked=db.all_rows('select ip::text as ip,reason,created_at from blocked_ips order by created_at desc')
         return jsonify(channels=channels,violations=violations,blocked_ips=blocked,sessions='anonymous/session cookies')
+    @app.get('/api/admin/live')
+    @admin_required
+    def api_admin_live():
+        security=db.all_rows("select event_type,ip::text as ip,detail,created_at from security_events order by created_at desc limit 40")
+        messages=db.all_rows("select c.channel_code,m.display_name,m.ciphertext,m.nonce,m.created_at from messages m join channels c on c.id=m.channel_id order by m.created_at desc limit 40")
+        from .security import decrypt_message
+        events=[{'type':'security','label':r['event_type'],'channel':'—','actor':r['ip'] or 'unknown','detail':r['detail'],'created_at':r['created_at'].isoformat()} for r in security]
+        for r in messages:
+            try: text=decrypt_message(r['nonce'],r['ciphertext'])
+            except Exception: text='[unable to decrypt]'
+            events.append({'type':'message','label':'message','channel':r['channel_code'],'actor':r['display_name'],'detail':{'text':text},'created_at':r['created_at'].isoformat()})
+        events.sort(key=lambda x:x['created_at'],reverse=True)
+        return jsonify(events=events[:60],server_time=datetime.now(timezone.utc).isoformat())
     @app.delete('/api/admin/channels/<code>')
     @admin_required
     def api_admin_delete_channel(code):
