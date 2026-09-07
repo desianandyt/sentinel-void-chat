@@ -69,7 +69,9 @@ def build_app():
             elif 'ssl' in message or 'certificate' in message: category='ssl'
             elif 'resolve' in message or 'name or service' in message or 'host' in message: category='hostname'
             else: category='connection_or_schema'
-            return jsonify(status='degraded',database='unavailable',driver='pg8000',database_error=category),503
+            detail=re.sub(r'(?i)(postgres(?:ql)?://[^\s/]+:)[^@\s]+(@)',r'\1***\2',str(exc))
+            detail=re.sub(r'(?i)(password[=:\s]+)[^\s,;]+',r'\1***',detail)[:500]
+            return jsonify(status='degraded',database='unavailable',driver='pg8000',database_error=category,database_detail=detail),503
     @app.post('/api/session')
     def api_session():
         data=request.get_json(silent=True) or {}; name=clean_text(data.get('display_name'),40)
@@ -89,7 +91,10 @@ def build_app():
             row=db.one('insert into channels(channel_code,name,password_hash,creator_session_hash,expires_at) values(%s,%s,%s,%s,%s) returning channel_code,name,expires_at',(code,name,bcrypt.hashpw(password.encode(),bcrypt.gensalt()).decode() if password else None,__import__('hashlib').sha256(session['sid'].encode()).hexdigest(),expires))
         except Exception as exc:
             if db.is_unique_violation(exc): return jsonify(error='Channel ID already exists'),409
-            if db.is_database_error(exc): return jsonify(error='Database unavailable. Check DATABASE_URL and run schema.sql in Supabase.'),503
+            if db.is_database_error(exc):
+                detail=re.sub(r'(?i)(postgres(?:ql)?://[^\s/]+:)[^@\s]+(@)',r'\1***\2',str(exc))
+                detail=re.sub(r'(?i)(password[=:\s]+)[^\s,;]+',r'\1***',detail)[:500]
+                return jsonify(error='Database unavailable',database_detail=detail),503
             raise
         return jsonify(channel=row)
     @app.post('/api/admin/login')
