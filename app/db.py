@@ -7,7 +7,7 @@ from psycopg.rows import dict_row
 def db_url(): return os.environ['DATABASE_URL']
 @contextmanager
 def conn():
-    with psycopg.connect(db_url(),row_factory=dict_row,connect_timeout=10) as c:
+    with psycopg.connect(db_url(),row_factory=dict_row,connect_timeout=10,sslmode='require') as c:
         yield c
         c.commit()
 def ensure_schema():

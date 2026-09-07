@@ -59,7 +59,12 @@ def build_app():
         if not session.get('sid'): new_identity()
         return render_template('admin.html',csrf=session['csrf'])
     @app.get('/healthz')
-    def health(): return {'status':'ok'}
+    def health():
+        try:
+            db.one('select 1 from channels limit 0')
+            return {'status':'ok','database':'ok'}
+        except Exception:
+            return jsonify(status='degraded',database='unavailable'),503
     @app.post('/api/session')
     def api_session():
         data=request.get_json(silent=True) or {}; name=clean_text(data.get('display_name'),40)
