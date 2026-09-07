@@ -79,6 +79,40 @@ def build_app():
         if not session.get('sid'): new_identity()
         try: return jsonify(channels=db.public_channels(clean_text(request.args.get('q',''),40)))
         except Exception: return jsonify(error='Public channel directory unavailable'),503
+    @app.post('/api/channel/join')
+    def api_channel_join():
+        data=request.get_json(silent=True) or {}; code=clean_text(data.get('channel'),64); password=str(data.get('password',''))
+        try: channel=db.find_channel(code)
+        except Exception: return jsonify(error='Channel service temporarily unavailable'),503
+        if not channel: return jsonify(error='Channel not found or expired'),404
+        if channel.get('password_hash'):
+            if not bcrypt.checkpw(password.encode(),channel['password_hash'].encode()): return jsonify(error='Invalid channel password'),403
+        session['channel_id']=str(channel['id']); session['channel_code']=code
+        try:
+            rows=db.channel_messages(channel['id'],100)
+            messages=[{'id':str(x['id']),'display_name':x['display_name'],'text':__import__('app.security',fromlist=['decrypt_message']).decrypt_message(x['nonce'],x['ciphertext']),'created_at':str(x['created_at'])} for x in reversed(rows)]
+            return jsonify(channel={'channel_code':code,'name':channel['name'],'expires_at':channel['expires_at']},messages=messages)
+        except Exception: return jsonify(error='Unable to load channel history'),503
+    @app.get('/api/channel/messages')
+    def api_channel_messages():
+        if not session.get('channel_id'): return jsonify(error='Not joined to a channel'),403
+        try:
+            rows=db.channel_messages(session['channel_id'],100)
+            messages=[{'id':str(x['id']),'display_name':x['display_name'],'text':__import__('app.security',fromlist=['decrypt_message']).decrypt_message(x['nonce'],x['ciphertext']),'created_at':str(x['created_at'])} for x in reversed(rows)]
+            return jsonify(messages=messages)
+        except Exception: return jsonify(error='Unable to load messages'),503
+    @app.post('/api/channel/messages')
+    def api_channel_message():
+        if not session.get('channel_id'): return jsonify(error='Not joined to a channel'),403
+        text=clean_text((request.get_json(silent=True) or {}).get('text'),1000)
+        if not text: return jsonify(error='Message cannot be empty'),400
+        rate_limit('http_message',5,10)
+        from .security import encrypt_message, session_hash
+        nonce,cipher=encrypt_message(text)
+        try:
+            row=db.insert_message(session['channel_id'],session_hash(),clean_text(session.get('display_name','Guest'),40),cipher,nonce)
+            return jsonify(message={'id':str(row['id']),'display_name':session.get('display_name','Guest'),'text':text,'created_at':str(row['created_at'])})
+        except Exception: return jsonify(error='Message could not be stored'),503
     @app.post('/api/channels')
     def api_create_channel():
         import bcrypt
