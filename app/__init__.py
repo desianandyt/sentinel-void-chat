@@ -2,7 +2,6 @@ from __future__ import annotations
 import base64, os, re, threading, time
 from datetime import datetime, timezone
 import bcrypt
-import psycopg
 from dotenv import load_dotenv
 from flask import Flask, jsonify, render_template, request, session
 from werkzeug.exceptions import HTTPException
@@ -83,9 +82,8 @@ def build_app():
         try:
             row=db.one('insert into channels(channel_code,name,password_hash,creator_session_hash,expires_at) values(%s,%s,%s,%s,%s) returning channel_code,name,expires_at',(code,name,bcrypt.hashpw(password.encode(),bcrypt.gensalt()).decode() if password else None,__import__('hashlib').sha256(session['sid'].encode()).hexdigest(),expires))
         except Exception as exc:
-            from psycopg.errors import UniqueViolation
-            if isinstance(exc,UniqueViolation): return jsonify(error='Channel ID already exists'),409
-            if isinstance(exc,psycopg.Error): return jsonify(error='Database unavailable. Check DATABASE_URL and run schema.sql in Supabase.'),503
+            if db.is_unique_violation(exc): return jsonify(error='Channel ID already exists'),409
+            if db.is_database_error(exc): return jsonify(error='Database unavailable. Check DATABASE_URL and run schema.sql in Supabase.'),503
             raise
         return jsonify(channel=row)
     @app.post('/api/admin/login')

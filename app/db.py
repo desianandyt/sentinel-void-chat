@@ -1,15 +1,42 @@
 from __future__ import annotations
 import json, os
 from contextlib import contextmanager
-import psycopg
-from psycopg.rows import dict_row
+from urllib.parse import unquote, urlparse
+import pg8000.dbapi as pg
 
-def db_url(): return os.environ['DATABASE_URL']
+
+def db_parts():
+    parsed=urlparse(os.environ['DATABASE_URL'])
+    return dict(user=unquote(parsed.username or ''),password=unquote(parsed.password or ''),host=parsed.hostname,port=parsed.port or 5432,database=unquote(parsed.path.lstrip('/')),timeout=10,ssl_context=True)
+
 @contextmanager
 def conn():
-    with psycopg.connect(db_url(),row_factory=dict_row,connect_timeout=10,sslmode='require') as c:
+    c=pg.connect(**db_parts())
+    try:
         yield c
         c.commit()
+    except Exception:
+        c.rollback()
+        raise
+    finally:
+        c.close()
+
+def _rows(cur):
+    columns=[x[0] for x in cur.description] if cur.description else []
+    return [dict(zip(columns,row)) for row in cur.fetchall()]
+
+def one(sql,params=()):
+    with conn() as c:
+        cur=c.cursor(); cur.execute(sql,params); rows=_rows(cur)
+        return rows[0] if rows else None
+
+def all_rows(sql,params=()):
+    with conn() as c:
+        cur=c.cursor(); cur.execute(sql,params); return _rows(cur)
+
+def execute(sql,params=()):
+    with conn() as c: c.cursor().execute(sql,params)
+
 def ensure_schema():
     statements=[
         'create extension if not exists pgcrypto',
@@ -22,14 +49,13 @@ def ensure_schema():
         'create index if not exists messages_channel_created_idx on messages(channel_id,created_at)'
     ]
     with conn() as c:
-        for statement in statements: c.execute(statement)
-def one(sql,params=()):
-    with conn() as c:
-        return c.execute(sql,params).fetchone()
-def all_rows(sql,params=()):
-    with conn() as c: return c.execute(sql,params).fetchall()
-def execute(sql,params=()):
-    with conn() as c: c.execute(sql,params)
+        cur=c.cursor()
+        for statement in statements: cur.execute(statement)
+
+def is_unique_violation(exc):
+    return 'duplicate key' in str(exc).lower() or 'unique constraint' in str(exc).lower()
+def is_database_error(exc):
+    return isinstance(exc,(pg.Error,OSError))
 def log_security(event,detail,ip=None,shash=None):
     execute('insert into security_events(event_type,ip,session_hash,detail) values(%s,%s,%s,%s)',(event,ip,shash,json.dumps(detail)))
 def active_channels():
