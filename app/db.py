@@ -1,62 +1,72 @@
 from __future__ import annotations
-import json, os
-from contextlib import contextmanager
-from urllib.parse import unquote, urlparse
-import pg8000.dbapi as pg
+import os
+from datetime import datetime, timezone
+from urllib.parse import urlencode
+from urllib.request import Request, urlopen
+from urllib.error import HTTPError, URLError
+import json
 
+class SupabaseError(RuntimeError):
+    def __init__(self,status,detail): self.status=status; self.detail=str(detail); super().__init__(self.detail)
 
-def db_parts():
-    parsed=urlparse(os.environ['DATABASE_URL'])
-    return dict(user=unquote(parsed.username or ''),password=unquote(parsed.password or ''),host=parsed.hostname,port=parsed.port or 5432,database=unquote(parsed.path.lstrip('/')),timeout=10,ssl_context=True)
+def config():
+    url=os.environ.get('SUPABASE_URL','').rstrip('/')
+    key=os.environ.get('SUPABASE_SERVICE_ROLE_KEY','')
+    if not url or not key: raise SupabaseError(503,'SUPABASE_URL and SUPABASE_SERVICE_ROLE_KEY are required')
+    return url+'/rest/v1',key
 
-@contextmanager
-def conn():
-    c=pg.connect(**db_parts())
+def request(method,table,params=None,body=None,prefer='return=representation'):
+    base,key=config(); query=('?'+urlencode(params,doseq=True)) if params else ''
+    data=None if body is None else json.dumps(body,default=str).encode()
+    headers={'apikey':key,'Authorization':'Bearer '+key,'Content-Type':'application/json','Accept':'application/json','Prefer':prefer}
     try:
-        yield c
-        c.commit()
-    except Exception:
-        c.rollback()
-        raise
-    finally:
-        c.close()
+        with urlopen(Request(f'{base}/{table}{query}',data=data,headers=headers,method=method),timeout=15) as r:
+            raw=r.read(); return json.loads(raw) if raw else []
+    except HTTPError as e:
+        detail=e.read().decode(errors='replace')[:600]
+        raise SupabaseError(e.code,detail)
+    except (URLError,TimeoutError,OSError) as e: raise SupabaseError(503,str(e))
 
-def _rows(cur):
-    columns=[x[0] for x in cur.description] if cur.description else []
-    return [dict(zip(columns,row)) for row in cur.fetchall()]
+def ensure_schema(): return None
 
-def one(sql,params=()):
-    with conn() as c:
-        cur=c.cursor(); cur.execute(sql,params); rows=_rows(cur)
-        return rows[0] if rows else None
+def one(table,params=None,body=None,method='GET'):
+    rows=request(method,table,params,body)
+    return rows[0] if rows else None
 
-def all_rows(sql,params=()):
-    with conn() as c:
-        cur=c.cursor(); cur.execute(sql,params); return _rows(cur)
-
-def execute(sql,params=()):
-    with conn() as c: c.cursor().execute(sql,params)
-
-def ensure_schema():
-    statements=[
-        'create extension if not exists pgcrypto',
-        '''create table if not exists channels (id uuid primary key default gen_random_uuid(), channel_code varchar(64) not null unique, name varchar(80) not null, password_hash text, creator_session_hash char(64) not null, expires_at timestamptz, created_at timestamptz not null default now(), deleted_at timestamptz)''',
-        '''create table if not exists messages (id uuid primary key default gen_random_uuid(), channel_id uuid not null references channels(id) on delete cascade, session_hash char(64) not null, display_name varchar(40) not null, ciphertext bytea not null, nonce bytea not null, created_at timestamptz not null default now())''',
-        '''create table if not exists admin_audit_logs (id bigserial primary key, action varchar(80) not null, actor varchar(80) not null, ip inet, metadata jsonb not null default '{}'::jsonb, created_at timestamptz not null default now())''',
-        '''create table if not exists security_events (id bigserial primary key, event_type varchar(80) not null, ip inet, session_hash char(64), detail jsonb not null default '{}'::jsonb, created_at timestamptz not null default now())''',
-        '''create table if not exists blocked_ips (ip inet primary key, reason text, created_at timestamptz not null default now())''',
-        'create index if not exists channels_expiry_idx on channels(expires_at)',
-        'create index if not exists messages_channel_created_idx on messages(channel_id,created_at)'
-    ]
-    with conn() as c:
-        cur=c.cursor()
-        for statement in statements: cur.execute(statement)
-
-def is_unique_violation(exc):
-    return 'duplicate key' in str(exc).lower() or 'unique constraint' in str(exc).lower()
-def is_database_error(exc):
-    return isinstance(exc,(pg.Error,OSError))
+def all_rows(table,params=None): return request('GET',table,params)
+def _decode_bytea(value):
+    if isinstance(value,bytes): return value
+    text=str(value)
+    return bytes.fromhex(text[2:] if text.startswith('\\x') else text)
+def create_channel(code,name,password_hash,creator_hash,expires):
+    return one('channels',body={'channel_code':code,'name':name,'password_hash':password_hash,'creator_session_hash':creator_hash,'expires_at':expires.isoformat() if expires else None},method='POST')
+def find_channel(code):
+    rows=all_rows('channels',{'channel_code':f'eq.{code}','deleted_at':'is.null','select':'*','limit':'1'})
+    if not rows:return None
+    row=rows[0]
+    if row.get('expires_at') and datetime.fromisoformat(row['expires_at'].replace('Z','+00:00'))<=datetime.now(timezone.utc): return None
+    return row
+def channel_messages(channel_id,limit=100):
+    rows=all_rows('messages',{'channel_id':f'eq.{channel_id}','select':'id,display_name,ciphertext,nonce,created_at','order':'created_at.desc','limit':str(limit)})
+    for row in rows: row['ciphertext']=_decode_bytea(row['ciphertext']); row['nonce']=_decode_bytea(row['nonce'])
+    return rows
+def insert_message(channel_id,session_hash,display_name,ciphertext,nonce):
+    return one('messages',body={'channel_id':channel_id,'session_hash':session_hash,'display_name':display_name,'ciphertext':'\\x'+ciphertext.hex(),'nonce':'\\x'+nonce.hex()},method='POST')
+def active_channels(): return all_rows('channels',{'deleted_at':'is.null','select':'id,channel_code,name,expires_at,created_at','order':'created_at.desc'})
+def security_events(limit=100): return all_rows('security_events',{'select':'id,event_type,ip,session_hash,detail,created_at','order':'created_at.desc','limit':str(limit)})
+def blocked_ips(): return all_rows('blocked_ips',{'select':'ip,reason,created_at','order':'created_at.desc'})
+def delete_channel(code): return request('DELETE','channels',{'channel_code':f'eq.{code}'},prefer='return=minimal')
+def admin_messages(code):
+    channels=all_rows('channels',{'channel_code':f'eq.{code}','select':'id','limit':'1'})
+    if not channels:return []
+    rows=all_rows('messages',{'channel_id':f'eq.{channels[0]["id"]}','select':'display_name,ciphertext,nonce,created_at','order':'created_at.desc','limit':'500'})
+    for row in rows: row['ciphertext']=_decode_bytea(row['ciphertext']); row['nonce']=_decode_bytea(row['nonce'])
+    return rows
+def block_ip(ip,reason): return request('POST','blocked_ips',body={'ip':ip,'reason':reason},prefer='resolution=merge-duplicates,return=minimal')
+def unblock_ip(ip): return request('DELETE','blocked_ips',{'ip':f'eq.{ip}'},prefer='return=minimal')
 def log_security(event,detail,ip=None,shash=None):
-    execute('insert into security_events(event_type,ip,session_hash,detail) values(%s,%s,%s,%s)',(event,ip,shash,json.dumps(detail)))
-def active_channels():
-    return all_rows("select id::text as id,channel_code,name,expires_at,created_at from channels where deleted_at is null and (expires_at is null or expires_at>now()) order by created_at desc")
+    try: request('POST','security_events',body={'event_type':event,'ip':ip,'session_hash':shash,'detail':detail},prefer='return=minimal')
+    except Exception: pass
+def expired_channels(): return all_rows('channels',{'expires_at':'not.is.null','expires_at':'lt.'+datetime.now(timezone.utc).isoformat(),'select':'channel_code'})
+def cleanup_expired():
+    for row in expired_channels(): delete_channel(row['channel_code'])

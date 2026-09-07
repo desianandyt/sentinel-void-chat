@@ -2,7 +2,7 @@
 
 ## 1. Create the database
 
-Create a Supabase project, open the SQL Editor, and run `schema.sql`. Copy the server-side PostgreSQL connection string from Supabase. Do not use the browser anon key as `DATABASE_URL`. For Render, prefer Supabase **Connection Pooling → Transaction mode** on port `6543`; the direct `db.<project>.supabase.co:5432` host can be unreachable from some Render regions.
+Create a Supabase project, open the SQL Editor, and run `schema.sql`. This version talks to Supabase over the HTTPS Data REST API using a server-only service-role key, so Render does not need a TCP PostgreSQL connection.
 
 ## 2. Create the Render service
 
@@ -16,7 +16,8 @@ Set these values in the Render service environment:
 
 | Variable | Value |
 |---|---|
-| `DATABASE_URL` | Supabase server-side PostgreSQL pooler URL, preferably transaction mode on port 6543 |
+| `SUPABASE_URL` | `https://YOUR_PROJECT_REF.supabase.co` |
+| `SUPABASE_SERVICE_ROLE_KEY` | Supabase server-only service-role key; never expose it to browsers |
 | `REDIS_URL` | Render Redis URL, if using multi-instance deployment |
 | `MESSAGE_ENCRYPTION_KEY` | URL-safe base64 encoding of exactly 32 random bytes |
 | `ADMIN_PASSWORD_HASH` | bcrypt hash of the production admin password |
@@ -41,7 +42,7 @@ The development fallback credentials are `anand` / `papaanand`; replace the pass
 
 ## 4. Verify
 
-The application attempts a safe `CREATE TABLE IF NOT EXISTS` bootstrap at startup, but you should still run the full `schema.sql` because it contains indexes, constraints, and RLS configuration.
+The application uses the existing tables through Supabase REST. Run the full `schema.sql` before deployment because it creates the tables, indexes, constraints, and RLS configuration.
 
 After deployment, open:
 

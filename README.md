@@ -9,13 +9,13 @@ Anonymous users receive a signed, HttpOnly, SameSite session cookie. The server 
 ## Run locally
 
 1. Create a Supabase project and run `schema.sql` in the SQL editor.
-2. Copy `.env.example` to `.env`. Set `DATABASE_URL` to the Supabase server-side connection string, not an anon browser key. Generate a 32-byte encryption key with `python -c "import os,base64; print(base64.urlsafe_b64encode(os.urandom(32)).decode())"` and place it in `MESSAGE_ENCRYPTION_KEY`.
+2. Copy `.env.example` to `.env`. Set `SUPABASE_URL` and `SUPABASE_SERVICE_ROLE_KEY`; the service-role key is server-only and must never be sent to browsers. Generate a 32-byte encryption key with `python -c "import os,base64; print(base64.urlsafe_b64encode(os.urandom(32)).decode())"` and place it in `MESSAGE_ENCRYPTION_KEY`.
 3. Set `ADMIN_USERNAME=anand` and `ADMIN_PASSWORD_HASH` to the bcrypt hash for the password you want. The repository includes the exact hash supplied for this deployment. A bcrypt hash cannot be converted back into its plaintext password; if that hash was not generated from `papaanand`, use its original password or generate a new hash.
 4. Run `docker compose up --build`, then open `http://localhost:5000`. Open `/admin` for the dashboard.
 
 ## Deployment
 
-Render can use the included `render.yaml` and `Dockerfile`. Add `DATABASE_URL`, `REDIS_URL`, `MESSAGE_ENCRYPTION_KEY`, `SECRET_KEY`, and a production `ADMIN_PASSWORD_HASH` as secrets. Run one web instance for the built-in expiry worker, or move cleanup to a single worker/cron process when scaling horizontally. For multiple web instances, configure Redis message queue support and use a distributed rate limiter implementation in place of the in-memory fallback.
+Render can use the included `render.yaml` and `Dockerfile`. Add `SUPABASE_URL`, `SUPABASE_SERVICE_ROLE_KEY`, `REDIS_URL`, `MESSAGE_ENCRYPTION_KEY`, `SECRET_KEY`, and a production `ADMIN_PASSWORD_HASH` as secrets. Run one web instance for the built-in expiry worker, or move cleanup to a single worker/cron process when scaling horizontally. For multiple web instances, configure Redis message queue support and use a distributed rate limiter implementation in place of the in-memory fallback.
 
 ## Important operational notes
 

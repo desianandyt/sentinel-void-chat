@@ -25,10 +25,6 @@ def build_app():
         try: db.log_security(event,detail,client_ip(),None)
         except Exception: pass
     app.config['SECURITY_LOG']=security_log
-    try:
-        db.ensure_schema()
-    except Exception as exc:
-        app.logger.warning('Database schema bootstrap unavailable: %s',exc)
     @app.errorhandler(HTTPException)
     def api_http_error(error):
         if request.path.startswith('/api/'):
@@ -60,8 +56,8 @@ def build_app():
     @app.get('/healthz')
     def health():
         try:
-            db.one('select 1 from channels limit 0')
-            return {'status':'ok','database':'ok','driver':'pg8000'}
+            db.active_channels()
+            return {'status':'ok','database':'ok','driver':'supabase-rest'}
         except Exception as exc:
             message=str(exc).lower()
             if 'timeout' in message or 'timed out' in message: category='timeout'
@@ -71,7 +67,7 @@ def build_app():
             else: category='connection_or_schema'
             detail=re.sub(r'(?i)(postgres(?:ql)?://[^\s/]+:)[^@\s]+(@)',r'\1***\2',str(exc))
             detail=re.sub(r'(?i)(password[=:\s]+)[^\s,;]+',r'\1***',detail)[:500]
-            return jsonify(status='degraded',database='unavailable',driver='pg8000',database_error=category,database_detail=detail),503
+            return jsonify(status='degraded',database='unavailable',driver='supabase-rest',database_error=category,database_detail=detail),503
     @app.post('/api/session')
     def api_session():
         data=request.get_json(silent=True) or {}; name=clean_text(data.get('display_name'),40)
@@ -88,10 +84,10 @@ def build_app():
         expires=None if minutes<=0 else datetime.now(timezone.utc).timestamp()+min(minutes,10080)*60
         if expires: from datetime import datetime as D; expires=D.fromtimestamp(expires,timezone.utc)
         try:
-            row=db.one('insert into channels(channel_code,name,password_hash,creator_session_hash,expires_at) values(%s,%s,%s,%s,%s) returning channel_code,name,expires_at',(code,name,bcrypt.hashpw(password.encode(),bcrypt.gensalt()).decode() if password else None,__import__('hashlib').sha256(session['sid'].encode()).hexdigest(),expires))
+            row=db.create_channel(code,name,bcrypt.hashpw(password.encode(),bcrypt.gensalt()).decode() if password else None,__import__('hashlib').sha256(session['sid'].encode()).hexdigest(),expires)
         except Exception as exc:
-            if db.is_unique_violation(exc): return jsonify(error='Channel ID already exists'),409
-            if db.is_database_error(exc):
+            if 'duplicate' in str(exc).lower() or 'unique' in str(exc).lower(): return jsonify(error='Channel ID already exists'),409
+            if isinstance(exc,db.SupabaseError):
                 detail=re.sub(r'(?i)(postgres(?:ql)?://[^\s/]+:)[^@\s]+(@)',r'\1***\2',str(exc))
                 detail=re.sub(r'(?i)(password[=:\s]+)[^\s,;]+',r'\1***',detail)[:500]
                 return jsonify(error='Database unavailable',database_detail=detail),503
@@ -109,13 +105,15 @@ def build_app():
     @app.get('/api/admin/overview')
     @admin_required
     def api_admin_overview():
-        channels=db.active_channels(); violations=db.all_rows("select id,event_type,ip::text as ip,session_hash,detail,created_at from security_events order by created_at desc limit 100"); blocked=db.all_rows('select ip::text as ip,reason,created_at from blocked_ips order by created_at desc')
+        channels=db.active_channels(); violations=db.security_events(100); blocked=db.blocked_ips()
         return jsonify(channels=channels,violations=violations,blocked_ips=blocked,sessions='anonymous/session cookies')
     @app.get('/api/admin/live')
     @admin_required
     def api_admin_live():
-        security=db.all_rows("select event_type,ip::text as ip,detail,created_at from security_events order by created_at desc limit 40")
-        messages=db.all_rows("select c.channel_code,m.display_name,m.ciphertext,m.nonce,m.created_at from messages m join channels c on c.id=m.channel_id order by m.created_at desc limit 40")
+        security=db.security_events(40)
+        messages=[]
+        for channel in db.active_channels():
+            for message in db.channel_messages(channel['id'],40): message['channel_code']=channel['channel_code']; messages.append(message)
         from .security import decrypt_message
         events=[{'type':'security','label':r['event_type'],'channel':'—','actor':r['ip'] or 'unknown','detail':r['detail'],'created_at':r['created_at'].isoformat()} for r in security]
         for r in messages:
@@ -127,11 +125,11 @@ def build_app():
     @app.delete('/api/admin/channels/<code>')
     @admin_required
     def api_admin_delete_channel(code):
-        db.execute('delete from channels where channel_code=%s',(clean_text(code,64),)); return jsonify(ok=True)
+        db.delete_channel(clean_text(code,64)); return jsonify(ok=True)
     @app.get('/api/admin/messages/<code>')
     @admin_required
     def api_admin_messages(code):
-        rows=db.all_rows('select m.*,c.channel_code from messages m join channels c on c.id=m.channel_id where c.channel_code=%s order by m.created_at desc limit 500',(clean_text(code,64),))
+        rows=db.admin_messages(clean_text(code,64))
         from .security import decrypt_message
         return jsonify(messages=[{'display_name':r['display_name'],'text':decrypt_message(r['nonce'],r['ciphertext']),'created_at':r['created_at'].isoformat()} for r in rows])
     @app.post('/api/admin/blocked-ips')
@@ -141,11 +139,11 @@ def build_app():
         import ipaddress
         try: ipaddress.ip_address(ip)
         except ValueError: return jsonify(error='Invalid IP address'),400
-        db.execute('insert into blocked_ips(ip,reason) values(%s,%s) on conflict(ip) do update set reason=excluded.reason',(ip,reason)); app.config['BLOCKED_IPS'].add(ip); return jsonify(ok=True)
+        db.block_ip(ip,reason); app.config['BLOCKED_IPS'].add(ip); return jsonify(ok=True)
     @app.delete('/api/admin/blocked-ips/<ip>')
     @admin_required
     def api_admin_unblock_ip(ip):
-        db.execute('delete from blocked_ips where ip=%s',(clean_text(ip,64),)); app.config['BLOCKED_IPS'].discard(ip); return jsonify(ok=True)
+        db.unblock_ip(clean_text(ip,64)); app.config['BLOCKED_IPS'].discard(ip); return jsonify(ok=True)
     register_socketio(socketio)
     if not app.debug and not os.environ.get('WERKZEUG_RUN_MAIN'): threading.Thread(target=cleanup_expired,args=(app,),daemon=True).start()
     app.socketio=socketio; return app

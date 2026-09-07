@@ -5,7 +5,9 @@ services:
     plan: starter
     healthCheckPath: /healthz
     envVars:
-      - key: DATABASE_URL
+      - key: SUPABASE_URL
+        sync: false
+      - key: SUPABASE_SERVICE_ROLE_KEY
         sync: false
       - key: REDIS_URL
         sync: false
