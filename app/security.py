@@ -21,11 +21,13 @@ def clean_text(value,max_len):
     return ' '.join(value.split())[:max_len]
 def client_ip(): return request.headers.get('CF-Connecting-IP',request.remote_addr or '0.0.0.0').split(',')[0].strip()
 def session_hash(): return hashlib.sha256(session['sid'].encode()).hexdigest()
+def ensure_identity():
+    if not session.get('sid') or session.get('expires',0)<time.time(): abort(401)
+    if client_ip() in current_app.config['BLOCKED_IPS']: abort(403)
 def require_identity(fn:Callable):
     @wraps(fn)
     def wrapped(*a,**kw):
-        if not session.get('sid') or session.get('expires',0)<time.time(): abort(401)
-        if client_ip() in current_app.config['BLOCKED_IPS']: abort(403)
+        ensure_identity()
         return fn(*a,**kw)
     return wrapped
 def require_csrf():

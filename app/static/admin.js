@@ -1,5 +1,5 @@
 const $=s=>document.querySelector(s);let data={channels:[],violations:[],blocked_ips:[]};
-async function api(url,opts={}){let r=await fetch(url,{...opts,headers:{'Content-Type':'application/json','X-CSRF-Token':window.CSRF,...(opts.headers||{})}});let d=await r.json().catch(()=>({}));if(!r.ok)throw Error(d.error||'Request failed');return d}
+async function api(url,opts={}){let r=await fetch(url,{...opts,headers:{'Content-Type':'application/json','Accept':'application/json','X-CSRF-Token':window.CSRF,...(opts.headers||{})}});let raw=await r.text(),d={};try{d=raw?JSON.parse(raw):{}}catch(_){throw Error(`Server error (${r.status}). Please try again.`)}if(!r.ok)throw Error(d.error||`Request failed (${r.status})`);return d}
 function toast(t){let e=$('#toast');e.textContent=t;e.classList.add('show');setTimeout(()=>e.classList.remove('show'),2600)}
 function date(v){return v?new Date(v).toLocaleString():'Never'}
 function esc(v){let e=document.createElement('span');e.textContent=v??'';return e.innerHTML}

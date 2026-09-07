@@ -4,10 +4,11 @@ from datetime import datetime, timezone
 import bcrypt
 from dotenv import load_dotenv
 from flask import Flask, jsonify, render_template, request, session
+from werkzeug.exceptions import HTTPException
 from flask_socketio import SocketIO
 from . import db
 from .realtime import register_socketio
-from .security import admin_required, clean_text, client_ip, new_identity, rate_limit, require_csrf, require_identity, verify_admin
+from .security import admin_required, clean_text, client_ip, ensure_identity, new_identity, rate_limit, require_csrf, verify_admin
 from .tasks import cleanup_expired
 load_dotenv()
 
@@ -24,6 +25,17 @@ def build_app():
         try: db.log_security(event,detail,client_ip(),None)
         except Exception: pass
     app.config['SECURITY_LOG']=security_log
+    @app.errorhandler(HTTPException)
+    def api_http_error(error):
+        if request.path.startswith('/api/'):
+            return jsonify(error=error.description or error.name), error.code
+        return error
+    @app.errorhandler(Exception)
+    def api_unhandled_error(error):
+        app.logger.exception('Unhandled application error')
+        if request.path.startswith('/api/'):
+            return jsonify(error='Server error. Please try again.'), 500
+        raise error
     socketio=SocketIO(app,async_mode='eventlet',cors_allowed_origins=os.environ.get('CORS_ORIGINS','http://localhost:5000').split(','),logger=False,message_queue=os.environ.get('REDIS_URL'))
     @app.before_request
     def guard():
@@ -31,7 +43,7 @@ def build_app():
             if not session.get('sid'): new_identity()
             return
         if request.endpoint and request.endpoint.startswith('api_'):
-            require_identity(); require_csrf(); rate_limit('http',120,60)
+            ensure_identity(); require_csrf(); rate_limit('http',120,60)
     @app.get('/')
     def index():
         if not session.get('sid'): new_identity()
