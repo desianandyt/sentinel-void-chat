@@ -3,6 +3,9 @@ from flask_socketio import emit, join_room, leave_room
 from . import db
 from .security import clean_text, decrypt_message, encrypt_message, ensure_socket, limiter, session_hash
 
+def timestamp(value):
+    return value.isoformat() if hasattr(value,'isoformat') else str(value)
+
 def register_socketio(socketio):
     @socketio.on('connect')
     def connected(auth=None):
@@ -23,9 +26,9 @@ def register_socketio(socketio):
         join_room(str(ch['id'])); session['channel_id']=str(ch['id']); session['channel_code']=code
         try:
             history=db.channel_messages(ch['id'],100)
-            messages=[{'id':str(x['id']),'display_name':x['display_name'],'text':decrypt_message(x['nonce'],x['ciphertext']),'created_at':x['created_at'].isoformat()} for x in reversed(history)]
+            messages=[{'id':str(x['id']),'display_name':x['display_name'],'text':decrypt_message(x['nonce'],x['ciphertext']),'created_at':timestamp(x['created_at'])} for x in reversed(history)]
         except Exception: emit('error',{'message':'Unable to load channel history'}); return
-        emit('joined',{'channel':code,'name':ch['name'],'expires_at':ch['expires_at'].isoformat() if ch['expires_at'] else None,'messages':messages})
+        emit('joined',{'channel':code,'name':ch['name'],'expires_at':timestamp(ch['expires_at']) if ch['expires_at'] else None,'messages':messages})
     @socketio.on('send_message')
     def message(data):
         if not ensure_socket(data) or not session.get('channel_id'): emit('error',{'message':'Security validation failed'}); return
@@ -36,7 +39,7 @@ def register_socketio(socketio):
         nonce,cipher=encrypt_message(text)
         try: row=db.insert_message(session['channel_id'],session_hash(),name,cipher,nonce)
         except Exception: emit('error',{'message':'Message could not be stored'}); return
-        emit('message',{'id':str(row['id']),'display_name':name,'text':text,'created_at':row['created_at'].isoformat()},to=session['channel_id'])
+        emit('message',{'id':str(row['id']),'display_name':name,'text':text,'created_at':timestamp(row['created_at'])},to=session['channel_id'])
     @socketio.on('leave_channel')
     def leave(data):
         if not ensure_socket(data): return
