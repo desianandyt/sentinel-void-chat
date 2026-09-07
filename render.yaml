@@ -1,0 +1,21 @@
+services:
+  - type: web
+    name: anonymous-secure-chat
+    runtime: docker
+    plan: starter
+    healthCheckPath: /healthz
+    envVars:
+      - key: DATABASE_URL
+        sync: false
+      - key: REDIS_URL
+        sync: false
+      - key: SECRET_KEY
+        generateValue: true
+      - key: MESSAGE_ENCRYPTION_KEY
+        sync: false
+      - key: ADMIN_USERNAME
+        value: anand
+      - key: ADMIN_PASSWORD_HASH
+        sync: false
+      - key: COOKIE_SECURE
+        value: "true"
