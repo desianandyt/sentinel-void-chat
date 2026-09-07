@@ -61,9 +61,15 @@ def build_app():
     def health():
         try:
             db.one('select 1 from channels limit 0')
-            return {'status':'ok','database':'ok'}
-        except Exception:
-            return jsonify(status='degraded',database='unavailable'),503
+            return {'status':'ok','database':'ok','driver':'pg8000'}
+        except Exception as exc:
+            message=str(exc).lower()
+            if 'timeout' in message or 'timed out' in message: category='timeout'
+            elif 'authentication' in message or 'password' in message: category='authentication'
+            elif 'ssl' in message or 'certificate' in message: category='ssl'
+            elif 'resolve' in message or 'name or service' in message or 'host' in message: category='hostname'
+            else: category='connection_or_schema'
+            return jsonify(status='degraded',database='unavailable',driver='pg8000',database_error=category),503
     @app.post('/api/session')
     def api_session():
         data=request.get_json(silent=True) or {}; name=clean_text(data.get('display_name'),40)
