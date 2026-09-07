@@ -74,6 +74,11 @@ def build_app():
         if len(name)<2: return jsonify(error='Display name must be 2–40 characters'),400
         session['display_name']=name
         return jsonify(csrf=session['csrf'],display_name=name)
+    @app.get('/api/public-channels')
+    def api_public_channels():
+        if not session.get('sid'): new_identity()
+        try: return jsonify(channels=db.public_channels(clean_text(request.args.get('q',''),40)))
+        except Exception: return jsonify(error='Public channel directory unavailable'),503
     @app.post('/api/channels')
     def api_create_channel():
         import bcrypt
@@ -84,7 +89,7 @@ def build_app():
         expires=None if minutes<=0 else datetime.now(timezone.utc).timestamp()+min(minutes,10080)*60
         if expires: from datetime import datetime as D; expires=D.fromtimestamp(expires,timezone.utc)
         try:
-            row=db.create_channel(code,name,bcrypt.hashpw(password.encode(),bcrypt.gensalt()).decode() if password else None,__import__('hashlib').sha256(session['sid'].encode()).hexdigest(),expires)
+            row=db.create_channel(code,name,bcrypt.hashpw(password.encode(),bcrypt.gensalt()).decode() if password else None,__import__('hashlib').sha256(session['sid'].encode()).hexdigest(),expires,False)
         except Exception as exc:
             if 'duplicate' in str(exc).lower() or 'unique' in str(exc).lower(): return jsonify(error='Channel ID already exists'),409
             if isinstance(exc,db.SupabaseError):
@@ -92,7 +97,7 @@ def build_app():
                 detail=re.sub(r'(?i)(password[=:\s]+)[^\s,;]+',r'\1***',detail)[:500]
                 return jsonify(error='Database unavailable',database_detail=detail),503
             raise
-        return jsonify(channel=row)
+        return jsonify(channel=row,invite_url=request.host_url.rstrip('/')+'/?invite='+row['channel_code'])
     @app.post('/api/admin/login')
     def api_admin_login():
         data=request.get_json(silent=True) or {}

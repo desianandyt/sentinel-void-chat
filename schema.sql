@@ -5,6 +5,7 @@ create table if not exists channels (
   channel_code varchar(64) not null unique,
   name varchar(80) not null,
   password_hash text,
+  is_public boolean not null default true,
   creator_session_hash char(64) not null,
   expires_at timestamptz,
   created_at timestamptz not null default now(),
@@ -12,6 +13,7 @@ create table if not exists channels (
   constraint channel_code_format check (channel_code ~ '^[A-Za-z0-9_-]{3,64}$')
 );
 create index if not exists channels_expiry_idx on channels(expires_at) where deleted_at is null;
+alter table channels add column if not exists is_public boolean not null default true;
 
 create table if not exists messages (
   id uuid primary key default gen_random_uuid(),

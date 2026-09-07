@@ -38,8 +38,13 @@ def _decode_bytea(value):
     if isinstance(value,bytes): return value
     text=str(value)
     return bytes.fromhex(text[2:] if text.startswith('\\x') else text)
-def create_channel(code,name,password_hash,creator_hash,expires):
-    return one('channels',body={'channel_code':code,'name':name,'password_hash':password_hash,'creator_session_hash':creator_hash,'expires_at':expires.isoformat() if expires else None},method='POST')
+def create_channel(code,name,password_hash,creator_hash,expires,is_public=False):
+    return one('channels',body={'channel_code':code,'name':name,'password_hash':password_hash,'is_public':is_public,'creator_session_hash':creator_hash,'expires_at':expires.isoformat() if expires else None},method='POST')
+def public_channels(search=''):
+    params={'is_public':'eq.true','deleted_at':'is.null','select':'channel_code,name,expires_at,created_at','order':'created_at.desc','limit':'50'}
+    if search: params['or']=f'(channel_code.ilike.*{search}*,name.ilike.*{search}*)'
+    rows=all_rows('channels',params); now=datetime.now(timezone.utc)
+    return [r for r in rows if not r.get('expires_at') or datetime.fromisoformat(r['expires_at'].replace('Z','+00:00'))>now]
 def find_channel(code):
     rows=all_rows('channels',{'channel_code':f'eq.{code}','deleted_at':'is.null','select':'*','limit':'1'})
     if not rows:return None
