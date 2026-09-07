@@ -89,7 +89,8 @@ def build_app():
         expires=None if minutes<=0 else datetime.now(timezone.utc).timestamp()+min(minutes,10080)*60
         if expires: from datetime import datetime as D; expires=D.fromtimestamp(expires,timezone.utc)
         try:
-            row=db.create_channel(code,name,bcrypt.hashpw(password.encode(),bcrypt.gensalt()).decode() if password else None,__import__('hashlib').sha256(session['sid'].encode()).hexdigest(),expires,False)
+            is_public=str(data.get('visibility','private')).lower()=='public'
+            row=db.create_channel(code,name,bcrypt.hashpw(password.encode(),bcrypt.gensalt()).decode() if password else None,__import__('hashlib').sha256(session['sid'].encode()).hexdigest(),expires,is_public)
         except Exception as exc:
             if 'duplicate' in str(exc).lower() or 'unique' in str(exc).lower(): return jsonify(error='Channel ID already exists'),409
             if isinstance(exc,db.SupabaseError):
